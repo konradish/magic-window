@@ -163,10 +163,10 @@
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x222222);
 
-            // Camera - Initial FOV is arbitrary, will be updated dynamically
+            // Camera - Set a fixed initial FOV (e.g., 75 degrees) for testing
             const aspect = window.innerWidth / window.innerHeight;
             // Use a small near plane suitable for meters, far plane can be large
-            camera = new THREE.PerspectiveCamera(50, aspect, 0.01, 100);
+            camera = new THREE.PerspectiveCamera(75, aspect, 0.01, 100); // Using fixed 75 FOV
             // Initial position set using the midpoint Z distance
             camera.position.copy(currentCameraPos);
 
@@ -325,16 +325,16 @@
             // Update camera position
             camera.position.copy(currentCameraPos);
 
-            // --- Dynamically update FOV based on Z distance and screen height ---
-            const screenHeightMM = parseFloat(screenHeightInput.value) || DEFAULT_SCREEN_HEIGHT_MM;
-            const currentZ = Math.max(currentCameraPos.z, 0.01); // Ensure Z is positive
-            const screenHeightMeters = screenHeightMM * WORLD_SCALE;
-
-            // Formula: fov = 2 * atan( (screenHeight / 2) / distanceFromScreen )
-            camera.fov = THREE.MathUtils.radToDeg(
-                2 * Math.atan(screenHeightMeters / (2 * currentZ))
-            );
-            camera.updateProjectionMatrix(); // IMPORTANT: Update projection matrix after FOV change
+            // --- (TEMP DISABLED) Dynamically update FOV based on Z distance and screen height ---
+            // const screenHeightMM = parseFloat(screenHeightInput.value) || DEFAULT_SCREEN_HEIGHT_MM;
+            // const currentZ = Math.max(currentCameraPos.z, 0.01); // Ensure Z is positive
+            // const screenHeightMeters = screenHeightMM * WORLD_SCALE;
+            //
+            // // Formula: fov = 2 * atan( (screenHeight / 2) / distanceFromScreen )
+            // camera.fov = THREE.MathUtils.radToDeg(
+            //     2 * Math.atan(screenHeightMeters / (2 * currentZ))
+            // );
+            // camera.updateProjectionMatrix(); // IMPORTANT: Update projection matrix after FOV change
 
             // Always look at the center of the scene origin (0,0,0)
             camera.lookAt(scene.position); // scene.position is (0,0,0) by default
