@@ -1,5 +1,7 @@
 # Face-Tracked 3D Window
 
+**[➡️ Live Demo (GitHub Pages) ⬅️](https://konradish.github.io/magic-window/)**
+
 **tl;dr** – This page spins up MediaPipe FaceMesh to grab eye landmarks from your webcam, pipes them into a tiny math shim, and offsets a THREE.js perspective-camera so the cube in front of you parallax-shifts as your head moves. Open the file over HTTPS, allow camera access, and your monitor turns into a faux “window” on a 3-D scene. Zero external servers are involved; everything runs client-side.
 
 ## How it works
