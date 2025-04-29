@@ -21,7 +21,7 @@
 </head>
 <body>
     <div class="container">
-        <video class="input_video"></video>
+        <video class="input_video" playsinline muted></video>
         <canvas id="output_canvas"></canvas>
     </div>
 
@@ -38,7 +38,7 @@
         let currentCameraOffsetX = 0, currentCameraOffsetY = 0;
         const videoElement = document.getElementsByClassName('input_video')[0];
         const canvasElement = document.getElementById('output_canvas');
-        const canvasCtx = canvasElement.getContext('2d'); // Note: We won't draw landmarks, but MediaPipe needs a context
+        // Note: MediaPipe CameraUtils doesn't strictly need a 2D context if not drawing video/landmarks
 
         // --- THREE.js Setup ---
         function initThree() {
@@ -90,17 +90,16 @@
             faceMesh.onResults(onResults);
 
             // Use CameraUtils to manage webcam feed
-            const cameraUtils = new Camera({
-                video: videoElement,
-                onFrame: async () => {
-                    // canvasCtx is needed for CameraUtils, but we don't draw the video frame
-                    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            // Correct constructor: new Camera(videoElement, options)
+            const camera = new Camera(videoElement, {
+                 onFrame: async () => {
+                    // No need to clear canvas if not drawing video/landmarks
                     await faceMesh.send({image: videoElement});
-                },
-                width: 640, // Lower resolution is often sufficient and faster
-                height: 480
+                 },
+                 width: 640, // Lower resolution is often sufficient and faster
+                 height: 480
             });
-            cameraUtils.start();
+            camera.start();
         }
 
         // --- MediaPipe Results Callback ---
