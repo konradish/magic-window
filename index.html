@@ -126,8 +126,10 @@
 
         // --- Global Variables ---
         let scene, camera, renderer, cube, sphere, torus;
-        let targetCameraPos = new THREE.Vector3(0, 0, (NEAR_Z_METERS + FAR_Z_METERS) / 2); // Target position in meters
-        let currentCameraPos = new THREE.Vector3(0, 0, (NEAR_Z_METERS + FAR_Z_METERS) / 2); // Smoothed position in meters
+        // Start camera further back initially
+        let initialCameraZ = FAR_Z_METERS;
+        let targetCameraPos = new THREE.Vector3(0, 0, initialCameraZ); // Target position in meters
+        let currentCameraPos = new THREE.Vector3(0, 0, initialCameraZ); // Smoothed position in meters
         let nearEyeDistPx = null, farEyeDistPx = null; // Calibration values in pixels
         let lastRawEyeDistPx = 0; // Store latest eye distance in pixels for calibration
         let smoothingFactor = DEFAULT_SMOOTHING; // Variable smoothing factor
@@ -179,25 +181,29 @@
             directionalLight.position.set(1, 1, 1);
             scene.add(directionalLight);
 
-            // Cube (Green, Middle)
-            const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
-            const cubeMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+            // --- Objects (Scaled Down and Repositioned) ---
+            const objectScale = 0.2; // Make objects smaller
+
+            // Cube (Green, Middle) - Scaled down
+            const cubeGeometry = new THREE.BoxGeometry(1 * objectScale, 1 * objectScale, 1 * objectScale);
+            const cubeMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00, metalness: 0.1, roughness: 0.5 });
             cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
-            cube.position.set(0, 0, 0); // Center
+            cube.position.set(0, 0, 0); // Keep cube at origin
             scene.add(cube);
 
-            // Sphere (Red, Far)
-            const sphereGeometry = new THREE.SphereGeometry(0.75, 32, 32);
-            const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+            // Sphere (Red, Behind Cube) - Scaled down and moved back relative to cube
+            const sphereGeometry = new THREE.SphereGeometry(0.75 * objectScale, 32, 32);
+            const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.1, roughness: 0.5 });
             sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
-            sphere.position.set(-1.5, 0.5, -3); // Offset and further back
+            sphere.position.set(-0.3 * objectScale * 5, 0.1 * objectScale * 5, -0.6); // Offset slightly left/up, behind origin
             scene.add(sphere);
 
-            // Torus (Blue, Close)
-            const torusGeometry = new THREE.TorusGeometry(0.5, 0.2, 16, 100);
-            const torusMaterial = new THREE.MeshStandardMaterial({ color: 0x0000ff });
+            // Torus (Blue, In Front of Cube) - Scaled down and moved forward relative to cube
+            const torusGeometry = new THREE.TorusGeometry(0.5 * objectScale, 0.2 * objectScale, 16, 100);
+            const torusMaterial = new THREE.MeshStandardMaterial({ color: 0x0000ff, metalness: 0.1, roughness: 0.5 });
             torus = new THREE.Mesh(torusGeometry, torusMaterial);
-            torus.position.set(1.5, -0.5, 2); // Offset and closer
+            // Offset slightly right/down, in front of origin (but behind initial camera Z)
+            torus.position.set(0.3 * objectScale * 5, -0.1 * objectScale * 5, 0.3);
             scene.add(torus);
 
             // Handle window resize
@@ -286,8 +292,8 @@
                         // Interpolate camera Z (lerp) between defined NEAR and FAR distances
                         currentTargetZ_meters = THREE.MathUtils.lerp(FAR_Z_METERS, NEAR_Z_METERS, depthRatio);
                     } else {
-                        // Not calibrated, use the default middle Z position
-                        currentTargetZ_meters = (NEAR_Z_METERS + FAR_Z_METERS) / 2;
+                        // Not calibrated, keep Z fixed at initial position (which is FAR_Z_METERS)
+                        currentTargetZ_meters = initialCameraZ;
                     }
                     targetCameraPos.z = currentTargetZ_meters;
 
