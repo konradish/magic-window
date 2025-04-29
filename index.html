@@ -10,7 +10,16 @@
         /* Hide the video element used by MediaPipe */
         .input_video { display: none; }
         .container { position: relative; width: 100%; height: 100%; }
-        #output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; } /* Ensure 3D canvas is behind debug */
+        #debug_canvas {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 320px; /* Smaller debug view */
+            height: 240px;
+            border: 1px solid white;
+            z-index: 2; /* Ensure debug canvas is on top */
+        }
     </style>
     <!-- THREE.js via CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -23,6 +32,7 @@
     <div class="container">
         <video class="input_video" playsinline muted></video>
         <canvas id="output_canvas"></canvas>
+        <canvas id="debug_canvas"></canvas> <!-- Added debug canvas -->
     </div>
 
     <script type="module">
@@ -38,7 +48,10 @@
         let currentCameraOffsetX = 0, currentCameraOffsetY = 0;
         const videoElement = document.getElementsByClassName('input_video')[0];
         const canvasElement = document.getElementById('output_canvas');
-        // Note: MediaPipe CameraUtils doesn't strictly need a 2D context if not drawing video/landmarks
+        const debugCanvas = document.getElementById('debug_canvas');
+        const debugCtx = debugCanvas.getContext('2d');
+        // Access drawingUtils from the global scope (loaded via CDN)
+        const drawingUtils = window;
 
         // --- THREE.js Setup ---
         function initThree() {
@@ -104,8 +117,24 @@
 
         // --- MediaPipe Results Callback ---
         function onResults(results) {
+            // Draw landmarks and video feed onto the debug canvas
+            debugCtx.save();
+            debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
+            // Ensure the image is mirrored like the video feed
+            debugCtx.translate(debugCanvas.width, 0);
+            debugCtx.scale(-1, 1);
+            debugCtx.drawImage(results.image, 0, 0, debugCanvas.width, debugCanvas.height);
+
             if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
                 const landmarks = results.multiFaceLandmarks[0]; // Use the first detected face
+
+                // Draw the full face mesh
+                drawingUtils.drawConnectors(debugCtx, landmarks, FACEMESH_TESSELATION,
+                                   {color: '#C0C0C070', lineWidth: 1});
+                // Highlight the specific eye landmarks used
+                drawingUtils.drawLandmarks(debugCtx, [landmarks[LEFT_EYE_INDEX], landmarks[RIGHT_EYE_INDEX]],
+                                  {color: '#FF0000', radius: 3});
+
 
                 // Get landmarks for the center of the lower eyelid
                 const leftEye = landmarks[LEFT_EYE_INDEX];
@@ -130,6 +159,7 @@
                 // targetCameraOffsetX = 0;
                 // targetCameraOffsetY = 0;
             }
+            debugCtx.restore(); // Restore context state
         }
 
         // --- THREE.js Animation Loop ---
