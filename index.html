@@ -58,19 +58,23 @@
         <div class="controls">
             <button id="setNearBtn">Set Near Point</button>
             <button id="setFarBtn">Set Far Point</button>
+            <label style="color:white;font-family:sans-serif;">
+              depth&nbsp;
+              <input type="range" id="parallaxScale" min="0.2" max="1" step="0.05" value="1">
+            </label>
             <span id="calibrationStatus">Status: Not Calibrated</span>
         </div>
     </div>
 
     <script type="module">
         // --- Configuration ---
-        const MAX_OFFSET = 2.0; // Max camera offset in world units
+        // const MAX_OFFSET = 2.0; // Removed - Replaced by dynamic calculation
         const SMOOTHING = 0.05; // Smoothing factor (0-1, lower is smoother)
         const LEFT_EYE_INDEX = 159; // Lower-mid landmark index for left eye
         const RIGHT_EYE_INDEX = 386; // Lower-mid landmark index for right eye
         const MIN_CAMERA_Z = 3.0; // Camera Z when head is closest
         const MAX_CAMERA_Z = 7.0; // Camera Z when head is furthest
-        const INITIAL_CAMERA_Z = 5.0; // Starting Z position
+        const INITIAL_CAMERA_Z = 4.0; // Starting Z position (a bit closer)
 
         // --- Global Variables ---
         let scene, camera, renderer, cube, sphere, torus;
@@ -85,6 +89,7 @@
         const calibrationStatusElement = document.getElementById('calibrationStatus');
         const setNearBtn = document.getElementById('setNearBtn');
         const setFarBtn = document.getElementById('setFarBtn');
+        const parallaxScale = document.getElementById('parallaxScale'); // Added slider reference
         // Access drawingUtils from the global scope (loaded via CDN)
         const drawingUtils = window;
 
@@ -136,6 +141,14 @@
 
             // Start animation loop
             animate();
+        }
+
+        // return {width, height} of the frustum slice at depth z
+        function viewSizeAtDepth(z) {
+          // Ensure camera is initialized before calling this
+          if (!camera) return { width: 0, height: 0 };
+          const h = 2 * z * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+          return { width: h * camera.aspect, height: h };
         }
 
         // --- MediaPipe FaceMesh Setup ---
@@ -201,9 +214,18 @@
                     const normalizedX = eyeCenterX - 0.5;
                     const normalizedY = -(eyeCenterY - 0.5);
 
-                    // --- X/Y Offset Calculation ---
-                    targetCameraOffsetX = normalizedX * MAX_OFFSET;
-                    targetCameraOffsetY = normalizedY * MAX_OFFSET;
+                    // --- X/Y Offset Calculation (physical) ---
+                    // Use current smoothed Z for stable view size calculation
+                    const { width: vw, height: vh } = viewSizeAtDepth(currentCameraOffsetZ);
+                    // move exactly half a frustum so the scene edge aligns with screen edge at max head move
+                    targetCameraOffsetX = normalizedX * (vw * 0.5);
+                    targetCameraOffsetY = normalizedY * (vh * 0.5);
+
+                    // Apply parallax scale from slider
+                    const scale = parseFloat(parallaxScale.value);
+                    targetCameraOffsetX *= scale;
+                    targetCameraOffsetY *= scale;
+
 
                     // --- Z Offset (Depth) Calculation ---
                     // Calculate raw distance between eyes in normalized coords
