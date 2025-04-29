@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face-Tracked 3D Window</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #222; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        canvas { display: block; }
+        /* Hide the video element used by MediaPipe */
+        .input_video { display: none; }
+        .container { position: relative; width: 100%; height: 100%; }
+        #output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+    </style>
+    <!-- THREE.js via CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- MediaPipe FaceMesh and Camera Utils via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script> <!-- Optional: for debugging landmarks -->
+</head>
+<body>
+    <div class="container">
+        <video class="input_video"></video>
+        <canvas id="output_canvas"></canvas>
+    </div>
+
+    <script type="module">
+        // --- Configuration ---
+        const MAX_OFFSET = 2.0; // Max camera offset in world units
+        const SMOOTHING = 0.05; // Smoothing factor (0-1, lower is smoother)
+        const LEFT_EYE_INDEX = 159; // Lower-mid landmark index for left eye
+        const RIGHT_EYE_INDEX = 386; // Lower-mid landmark index for right eye
+
+        // --- Global Variables ---
+        let scene, camera, renderer, cube;
+        let targetCameraOffsetX = 0, targetCameraOffsetY = 0;
+        let currentCameraOffsetX = 0, currentCameraOffsetY = 0;
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d'); // Note: We won't draw landmarks, but MediaPipe needs a context
+
+        // --- THREE.js Setup ---
+        function initThree() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x222222);
+
+            // Camera
+            const aspect = window.innerWidth / window.innerHeight;
+            camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
+            camera.position.z = 5; // Start camera back a bit
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040); // Soft white light
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // Cube
+            const geometry = new THREE.BoxGeometry();
+            const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+            cube = new THREE.Mesh(geometry, material);
+            scene.add(cube);
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+
+            // Start animation loop
+            animate();
+        }
+
+        // --- MediaPipe FaceMesh Setup ---
+        function initMediaPipe() {
+            const faceMesh = new FaceMesh({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+            }});
+
+            faceMesh.setOptions({
+                maxNumFaces: 1,
+                refineLandmarks: true, // Get iris landmarks if needed later
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            faceMesh.onResults(onResults);
+
+            // Use CameraUtils to manage webcam feed
+            const cameraUtils = new Camera({
+                video: videoElement,
+                onFrame: async () => {
+                    // canvasCtx is needed for CameraUtils, but we don't draw the video frame
+                    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                    await faceMesh.send({image: videoElement});
+                },
+                width: 640, // Lower resolution is often sufficient and faster
+                height: 480
+            });
+            cameraUtils.start();
+        }
+
+        // --- MediaPipe Results Callback ---
+        function onResults(results) {
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const landmarks = results.multiFaceLandmarks[0]; // Use the first detected face
+
+                // Get landmarks for the center of the lower eyelid
+                const leftEye = landmarks[LEFT_EYE_INDEX];
+                const rightEye = landmarks[RIGHT_EYE_INDEX];
+
+                if (leftEye && rightEye) {
+                    // Calculate the midpoint (barycenter) between the eyes
+                    const eyeCenterX = (leftEye.x + rightEye.x) / 2;
+                    const eyeCenterY = (leftEye.y + rightEye.y) / 2;
+
+                    // Convert normalized screen coordinates (0-1) to centered coordinates (-0.5 to 0.5)
+                    // Invert Y because screen Y is top-down, but 3D Y is bottom-up
+                    const normalizedX = eyeCenterX - 0.5;
+                    const normalizedY = -(eyeCenterY - 0.5);
+
+                    // Scale to desired camera offset range
+                    targetCameraOffsetX = normalizedX * MAX_OFFSET;
+                    targetCameraOffsetY = normalizedY * MAX_OFFSET;
+                }
+            } else {
+                // Optional: Reset target offset if no face is detected
+                // targetCameraOffsetX = 0;
+                // targetCameraOffsetY = 0;
+            }
+        }
+
+        // --- THREE.js Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Apply smoothing (Low-pass filter)
+            currentCameraOffsetX += (targetCameraOffsetX - currentCameraOffsetX) * SMOOTHING;
+            currentCameraOffsetY += (targetCameraOffsetY - currentCameraOffsetY) * SMOOTHING;
+
+            // Update camera position based on smoothed offset
+            // We move the camera position itself, not just lookAt offset
+            camera.position.x = currentCameraOffsetX;
+            camera.position.y = currentCameraOffsetY;
+
+            // Always look at the center of the scene (where the cube is)
+            camera.lookAt(scene.position);
+
+            // Rotate the cube for visual interest
+            cube.rotation.x += 0.01;
+            cube.rotation.y += 0.01;
+
+            renderer.render(scene, camera);
+        }
+
+        // --- Window Resize Handler ---
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- Initialization ---
+        initThree();
+        initMediaPipe();
+
+    </script>
+</body>
+</html>
