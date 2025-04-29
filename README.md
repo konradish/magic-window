@@ -40,7 +40,16 @@
 
 3.  **Allow camera access** when prompted by the browser.
 
-4.  **Move your head:** The cube should appear to shift in the opposite direction of your head movement, mimicking looking through a window.
+4.  **Calibrate Depth:**
+    *   You'll see buttons "Set Near Point" and "Set Far Point" at the bottom.
+    *   **Lean fully towards your screen** to the closest comfortable distance you want tracked. Click **"Set Near Point"**.
+    *   **Lean back** to the furthest comfortable distance you want tracked. Click **"Set Far Point"**.
+    *   The status text will update. If it shows "Calibrated", the depth tracking is active. If it shows an error (e.g., Near <= Far), try calibrating again.
+    *   *Note:* Calibration uses the distance between your eyes in the video feed. Ensure your face is clearly visible during calibration clicks.
+
+5.  **Move your head:**
+    *   Move side-to-side and up/down: The scene shifts like looking through a window.
+    *   Lean in/out (after calibration): The camera should zoom in/out, enhancing the 3D effect.
 
 ## Extensibility Ideas
 

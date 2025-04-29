@@ -20,6 +20,28 @@
             border: 1px solid white;
             z-index: 2; /* Ensure debug canvas is on top */
         }
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 3;
+            display: flex;
+            gap: 10px;
+        }
+        .controls button {
+            padding: 8px 15px;
+            cursor: pointer;
+        }
+        .controls span {
+            color: white;
+            font-family: sans-serif;
+            font-size: 14px;
+            align-self: center;
+        }
     </style>
     <!-- THREE.js via CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -33,6 +55,11 @@
         <video class="input_video" playsinline muted></video>
         <canvas id="output_canvas"></canvas>
         <canvas id="debug_canvas"></canvas> <!-- Added debug canvas -->
+        <div class="controls">
+            <button id="setNearBtn">Set Near Point</button>
+            <button id="setFarBtn">Set Far Point</button>
+            <span id="calibrationStatus">Status: Not Calibrated</span>
+        </div>
     </div>
 
     <script type="module">
@@ -41,17 +68,26 @@
         const SMOOTHING = 0.05; // Smoothing factor (0-1, lower is smoother)
         const LEFT_EYE_INDEX = 159; // Lower-mid landmark index for left eye
         const RIGHT_EYE_INDEX = 386; // Lower-mid landmark index for right eye
+        const MIN_CAMERA_Z = 3.0; // Camera Z when head is closest
+        const MAX_CAMERA_Z = 7.0; // Camera Z when head is furthest
+        const INITIAL_CAMERA_Z = 5.0; // Starting Z position
 
         // --- Global Variables ---
-        let scene, camera, renderer, cube, sphere, torus; // Added sphere and torus
-        let targetCameraOffsetX = 0, targetCameraOffsetY = 0;
-        let currentCameraOffsetX = 0, currentCameraOffsetY = 0;
+        let scene, camera, renderer, cube, sphere, torus;
+        let targetCameraOffsetX = 0, targetCameraOffsetY = 0, targetCameraOffsetZ = INITIAL_CAMERA_Z;
+        let currentCameraOffsetX = 0, currentCameraOffsetY = 0, currentCameraOffsetZ = INITIAL_CAMERA_Z;
+        let nearEyeDist = null, farEyeDist = null; // Calibration values
+        let lastRawEyeDist = 0; // Store latest eye distance for calibration clicks
         const videoElement = document.getElementsByClassName('input_video')[0];
         const canvasElement = document.getElementById('output_canvas');
         const debugCanvas = document.getElementById('debug_canvas');
         const debugCtx = debugCanvas.getContext('2d');
+        const calibrationStatusElement = document.getElementById('calibrationStatus');
+        const setNearBtn = document.getElementById('setNearBtn');
+        const setFarBtn = document.getElementById('setFarBtn');
         // Access drawingUtils from the global scope (loaded via CDN)
         const drawingUtils = window;
+
 
         // --- THREE.js Setup ---
         function initThree() {
@@ -61,7 +97,7 @@
             // Camera
             const aspect = window.innerWidth / window.innerHeight;
             camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
-            camera.position.z = 5; // Start camera back a bit
+            camera.position.z = INITIAL_CAMERA_Z; // Use constant for initial Z
 
             // Renderer
             renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true });
@@ -165,13 +201,36 @@
                     const normalizedX = eyeCenterX - 0.5;
                     const normalizedY = -(eyeCenterY - 0.5);
 
-                    // Scale to desired camera offset range
+                    // --- X/Y Offset Calculation ---
                     targetCameraOffsetX = normalizedX * MAX_OFFSET;
                     targetCameraOffsetY = normalizedY * MAX_OFFSET;
+
+                    // --- Z Offset (Depth) Calculation ---
+                    // Calculate raw distance between eyes in normalized coords
+                    const dx = leftEye.x - rightEye.x;
+                    const dy = leftEye.y - rightEye.y;
+                    // Use image width to make distance somewhat consistent across resolutions
+                    lastRawEyeDist = Math.hypot(dx * results.image.width, dy * results.image.height);
+
+                    // Map eye distance to camera Z if calibrated
+                    if (nearEyeDist !== null && farEyeDist !== null && nearEyeDist > farEyeDist) {
+                        // Clamp current distance to the calibrated range
+                        const clampedEyeDist = Math.max(farEyeDist, Math.min(nearEyeDist, lastRawEyeDist));
+                        // Calculate ratio (0 = far, 1 = near)
+                        const depthRatio = (clampedEyeDist - farEyeDist) / (nearEyeDist - farEyeDist);
+                        // Interpolate camera Z (lerp)
+                        // Target Z = MAX_Z when ratio is 0 (far), MIN_Z when ratio is 1 (near)
+                        targetCameraOffsetZ = MAX_CAMERA_Z + (MIN_CAMERA_Z - MAX_CAMERA_Z) * depthRatio;
+                    } else {
+                        // Not calibrated, keep Z fixed at initial position
+                        targetCameraOffsetZ = INITIAL_CAMERA_Z;
+                    }
                 }
             } else {
-                // Optional: Reset target offset if no face is detected
+                // Optional: Reset target offsets if no face is detected
                 // targetCameraOffsetX = 0;
+                // targetCameraOffsetY = 0;
+                // targetCameraOffsetZ = INITIAL_CAMERA_Z; // Reset Z as well?
                 // targetCameraOffsetY = 0;
             }
             debugCtx.restore(); // Restore context state
@@ -181,16 +240,17 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            // Apply smoothing (Low-pass filter)
+            // Apply smoothing (Low-pass filter) to X, Y, and Z offsets
             currentCameraOffsetX += (targetCameraOffsetX - currentCameraOffsetX) * SMOOTHING;
             currentCameraOffsetY += (targetCameraOffsetY - currentCameraOffsetY) * SMOOTHING;
+            currentCameraOffsetZ += (targetCameraOffsetZ - currentCameraOffsetZ) * SMOOTHING;
 
-            // Update camera position based on smoothed offset
-            // We move the camera position itself, not just lookAt offset
+            // Update camera position based on smoothed offsets
             camera.position.x = currentCameraOffsetX;
             camera.position.y = currentCameraOffsetY;
+            camera.position.z = currentCameraOffsetZ; // Update Z position
 
-            // Always look at the center of the scene (where the cube is)
+            // Always look at the center of the scene
             camera.lookAt(scene.position);
 
             // Cube rotation removed to achieve the "window" effect
@@ -207,9 +267,53 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         }
 
+        // --- Calibration ---
+        function updateCalibrationStatus() {
+            if (nearEyeDist !== null && farEyeDist !== null) {
+                if (nearEyeDist > farEyeDist) {
+                    calibrationStatusElement.textContent = `Status: Calibrated (Near: ${nearEyeDist.toFixed(1)}, Far: ${farEyeDist.toFixed(1)})`;
+                    calibrationStatusElement.style.color = 'lightgreen';
+                } else {
+                    calibrationStatusElement.textContent = 'Status: Error - Near must be > Far. Recalibrate.';
+                    calibrationStatusElement.style.color = 'red';
+                }
+            } else if (nearEyeDist !== null) {
+                calibrationStatusElement.textContent = `Status: Near set (${nearEyeDist.toFixed(1)}). Set Far Point.`;
+                calibrationStatusElement.style.color = 'yellow';
+            } else if (farEyeDist !== null) {
+                calibrationStatusElement.textContent = `Status: Far set (${farEyeDist.toFixed(1)}). Set Near Point.`;
+                calibrationStatusElement.style.color = 'yellow';
+            } else {
+                calibrationStatusElement.textContent = 'Status: Not Calibrated';
+                calibrationStatusElement.style.color = 'white';
+            }
+        }
+
+        setNearBtn.addEventListener('click', () => {
+            if (lastRawEyeDist > 0) {
+                nearEyeDist = lastRawEyeDist;
+                console.log(`Set Near Point - Eye Distance: ${nearEyeDist}`);
+                updateCalibrationStatus();
+            } else {
+                console.warn("Cannot set Near Point: No face detected or eye distance is zero.");
+            }
+        });
+
+        setFarBtn.addEventListener('click', () => {
+            if (lastRawEyeDist > 0) {
+                farEyeDist = lastRawEyeDist;
+                console.log(`Set Far Point - Eye Distance: ${farEyeDist}`);
+                updateCalibrationStatus();
+            } else {
+                console.warn("Cannot set Far Point: No face detected or eye distance is zero.");
+            }
+        });
+
+
         // --- Initialization ---
         initThree();
         initMediaPipe();
+        updateCalibrationStatus(); // Set initial status message
 
     </script>
 </body>
