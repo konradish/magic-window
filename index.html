@@ -178,9 +178,9 @@
             // Always look at the center of the scene (where the cube is)
             camera.lookAt(scene.position);
 
-            // Rotate the cube for visual interest
-            cube.rotation.x += 0.01;
-            cube.rotation.y += 0.01;
+            // Cube rotation removed to achieve the "window" effect
+            // cube.rotation.x += 0.01; // Removed
+            // cube.rotation.y += 0.01; // Removed
 
             renderer.render(scene, camera);
         }
