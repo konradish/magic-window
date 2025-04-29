@@ -43,7 +43,7 @@
         const RIGHT_EYE_INDEX = 386; // Lower-mid landmark index for right eye
 
         // --- Global Variables ---
-        let scene, camera, renderer, cube;
+        let scene, camera, renderer, cube, sphere, torus; // Added sphere and torus
         let targetCameraOffsetX = 0, targetCameraOffsetY = 0;
         let currentCameraOffsetX = 0, currentCameraOffsetY = 0;
         const videoElement = document.getElementsByClassName('input_video')[0];
@@ -74,11 +74,26 @@
             directionalLight.position.set(1, 1, 1);
             scene.add(directionalLight);
 
-            // Cube
-            const geometry = new THREE.BoxGeometry();
-            const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-            cube = new THREE.Mesh(geometry, material);
+            // Cube (Green, Middle)
+            const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
+            const cubeMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+            cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+            cube.position.set(0, 0, 0); // Center
             scene.add(cube);
+
+            // Sphere (Red, Far)
+            const sphereGeometry = new THREE.SphereGeometry(0.75, 32, 32);
+            const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+            sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+            sphere.position.set(-1.5, 0.5, -3); // Offset and further back
+            scene.add(sphere);
+
+            // Torus (Blue, Close)
+            const torusGeometry = new THREE.TorusGeometry(0.5, 0.2, 16, 100);
+            const torusMaterial = new THREE.MeshStandardMaterial({ color: 0x0000ff });
+            torus = new THREE.Mesh(torusGeometry, torusMaterial);
+            torus.position.set(1.5, -0.5, 2); // Offset and closer
+            scene.add(torus);
 
             // Handle window resize
             window.addEventListener('resize', onWindowResize, false);
