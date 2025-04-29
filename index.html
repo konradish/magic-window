@@ -29,8 +29,32 @@
             padding: 10px;
             border-radius: 5px;
             z-index: 3;
-            display: flex;
-            gap: 10px;
+            /* display: flex; */ /* Switched to grid for better wrapping */
+            /* gap: 10px; */
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); /* Responsive grid */
+            gap: 8px 15px; /* Row and column gap */
+            align-items: center; /* Vertically align items in grid cells */
+            max-width: 80%; /* Prevent controls from becoming too wide */
+        }
+        .controls button, .controls label, .controls span {
+            white-space: nowrap; /* Prevent labels from breaking line */
+        }
+        .controls label {
+            color: white;
+            font-family: sans-serif;
+            font-size: 13px;
+            display: flex; /* Align label text and input */
+            align-items: center;
+            gap: 5px;
+        }
+        .controls input[type="number"] {
+            /* width: 50px; */ /* Width set inline now */
+            padding: 2px 4px;
+        }
+        .controls input[type="range"] {
+            vertical-align: middle; /* Align sliders better */
+            width: 80px; /* Give sliders a bit more width */
         }
         .controls button {
             padding: 8px 15px;
@@ -75,30 +99,40 @@
         <div class="controls">
             <button id="setNearBtn">Set Near Point</button>
             <button id="setFarBtn">Set Far Point</button>
-            <label style="color:white;font-family:sans-serif;">
-              depth&nbsp;
-              <input type="range" id="parallaxScale" min="0.2" max="1" step="0.05" value="1">
-            </label>
+            <button id="resetCalibrationBtn">Reset Calibration</button>
             <span id="calibrationStatus">Status: Not Calibrated</span>
+            <br> <!-- Line break for better layout -->
+            <label title="Physical width of your monitor screen in millimeters">Screen Width (mm): <input type="number" id="screenWidthMM" value="344" style="width: 50px;"></label>
+            <label title="Physical height of your monitor screen in millimeters">Screen Height (mm): <input type="number" id="screenHeightMM" value="194" style="width: 50px;"></label>
+            <label title="Your Inter-Pupillary Distance in millimeters (avg: 63)">IPD (mm): <input type="number" id="ipdMM" value="63" style="width: 40px;"></label>
+            <label title="Exaggerate parallax effect">Parallax Scale: <input type="range" id="parallaxScale" min="0.1" max="2.0" step="0.1" value="1.0"></label>
+            <label title="Smoother motion but more lag">Smoothing: <input type="range" id="smoothingFactor" min="0.01" max="0.5" step="0.01" value="0.1"></label> <!-- Adjusted default smoothing -->
         </div>
     </div>
 
     <script type="module">
-        // --- Configuration ---
-        // const MAX_OFFSET = 2.0; // Removed - Replaced by dynamic calculation
-        const SMOOTHING = 0.05; // Smoothing factor (0-1, lower is smoother)
-        const LEFT_EYE_INDEX = 159; // Lower-mid landmark index for left eye
-        const RIGHT_EYE_INDEX = 386; // Lower-mid landmark index for right eye
-        const MIN_CAMERA_Z = 3.0; // Camera Z when head is closest
-        const MAX_CAMERA_Z = 7.0; // Camera Z when head is furthest
-        const INITIAL_CAMERA_Z = 4.0; // Starting Z position (a bit closer)
+        // --- Configuration & Constants ---
+        const WORLD_SCALE = 0.001; // Converts mm to meters (THREE.js units)
+        const DEFAULT_SCREEN_WIDTH_MM = 344; // Approx 15.4" laptop screen width
+        const DEFAULT_SCREEN_HEIGHT_MM = 194; // Approx 15.4" laptop screen height
+        const DEFAULT_IPD_MM = 63; // Average Inter-Pupillary Distance
+        const NEAR_Z_METERS = 0.3; // Closest distance head is expected (30cm)
+        const FAR_Z_METERS = 1.0; // Farthest distance head is expected (1m)
+        const DEFAULT_SMOOTHING = 0.1; // Default smoothing factor
+
+        // MediaPipe Landmark indices (Pupil centers for stability)
+        const LEFT_PUPIL_INDEX = 473; // Index for center of left pupil
+        const RIGHT_PUPIL_INDEX = 468; // Index for center of right pupil
 
         // --- Global Variables ---
         let scene, camera, renderer, cube, sphere, torus;
-        let targetCameraOffsetX = 0, targetCameraOffsetY = 0, targetCameraOffsetZ = INITIAL_CAMERA_Z;
-        let currentCameraOffsetX = 0, currentCameraOffsetY = 0, currentCameraOffsetZ = INITIAL_CAMERA_Z;
-        let nearEyeDist = null, farEyeDist = null; // Calibration values
-        let lastRawEyeDist = 0; // Store latest eye distance for calibration clicks
+        let targetCameraPos = new THREE.Vector3(0, 0, (NEAR_Z_METERS + FAR_Z_METERS) / 2); // Target position in meters
+        let currentCameraPos = new THREE.Vector3(0, 0, (NEAR_Z_METERS + FAR_Z_METERS) / 2); // Smoothed position in meters
+        let nearEyeDistPx = null, farEyeDistPx = null; // Calibration values in pixels
+        let lastRawEyeDistPx = 0; // Store latest eye distance in pixels for calibration
+        let smoothingFactor = DEFAULT_SMOOTHING; // Variable smoothing factor
+
+        // --- DOM Elements ---
         const videoElement = document.getElementsByClassName('input_video')[0];
         const canvasElement = document.getElementById('output_canvas');
         const debugCanvas = document.getElementById('debug_canvas');
@@ -106,20 +140,33 @@
         const calibrationStatusElement = document.getElementById('calibrationStatus');
         const setNearBtn = document.getElementById('setNearBtn');
         const setFarBtn = document.getElementById('setFarBtn');
-        const parallaxScale = document.getElementById('parallaxScale'); // Added slider reference
-        // Access drawingUtils from the global scope (loaded via CDN)
-        const drawingUtils = window;
+        const resetCalibrationBtn = document.getElementById('resetCalibrationBtn');
+        const screenWidthInput = document.getElementById('screenWidthMM');
+        const screenHeightInput = document.getElementById('screenHeightMM');
+        const ipdInput = document.getElementById('ipdMM');
+        const parallaxScaleSlider = document.getElementById('parallaxScale');
+        const smoothingSlider = document.getElementById('smoothingFactor');
+        const drawingUtils = window; // Access drawingUtils from the global scope
 
+
+        // --- Event Listeners for Controls ---
+        smoothingSlider.addEventListener('input', (event) => {
+            smoothingFactor = parseFloat(event.target.value);
+        });
+        // Add listeners for screen width, height, ipd if needed for dynamic updates,
+        // but for now we read them in the loop.
 
         // --- THREE.js Setup ---
         function initThree() {
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x222222);
 
-            // Camera
+            // Camera - Initial FOV is arbitrary, will be updated dynamically
             const aspect = window.innerWidth / window.innerHeight;
-            camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
-            camera.position.z = INITIAL_CAMERA_Z; // Use constant for initial Z
+            // Use a small near plane suitable for meters, far plane can be large
+            camera = new THREE.PerspectiveCamera(50, aspect, 0.01, 100);
+            // Initial position set using the midpoint Z distance
+            camera.position.copy(currentCameraPos);
 
             // Renderer
             renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true });
@@ -158,14 +205,6 @@
 
             // Start animation loop
             animate();
-        }
-
-        // return {width, height} of the frustum slice at depth z
-        function viewSizeAtDepth(z) {
-          // Ensure camera is initialized before calling this
-          if (!camera) return { width: 0, height: 0 };
-          const h = 2 * z * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
-          return { width: h * camera.aspect, height: h };
         }
 
         // --- MediaPipe FaceMesh Setup ---
@@ -210,67 +249,62 @@
                 const landmarks = results.multiFaceLandmarks[0]; // Use the first detected face
 
                 // Draw the full face mesh
-                drawingUtils.drawConnectors(debugCtx, landmarks, FACEMESH_TESSELATION,
-                                   {color: '#C0C0C070', lineWidth: 1});
-                // Highlight the specific eye landmarks used
-                drawingUtils.drawLandmarks(debugCtx, [landmarks[LEFT_EYE_INDEX], landmarks[RIGHT_EYE_INDEX]],
-                                  {color: '#FF0000', radius: 3});
+                drawingUtils.drawConnectors(debugCtx, landmarks, FACEMESH_TESSELATION, { color: '#C0C0C070', lineWidth: 1 });
+                // Highlight the pupil landmarks used
+                const leftPupil = landmarks[LEFT_PUPIL_INDEX];
+                const rightPupil = landmarks[RIGHT_PUPIL_INDEX];
+                if (leftPupil && rightPupil) {
+                    drawingUtils.drawLandmarks(debugCtx, [leftPupil, rightPupil], { color: '#FF0000', radius: 3 });
 
+                    // --- Calculate Head Pose ---
 
-                // Get landmarks for the center of the lower eyelid
-                const leftEye = landmarks[LEFT_EYE_INDEX];
-                const rightEye = landmarks[RIGHT_EYE_INDEX];
+                    // 1. Eye Center (Normalized Screen Coords 0-1)
+                    const eyeCenterX = (leftPupil.x + rightPupil.x) / 2;
+                    const eyeCenterY = (leftPupil.y + rightPupil.y) / 2;
 
-                if (leftEye && rightEye) {
-                    // Calculate the midpoint (barycenter) between the eyes
-                    const eyeCenterX = (leftEye.x + rightEye.x) / 2;
-                    const eyeCenterY = (leftEye.y + rightEye.y) / 2;
+                    // 2. Distance between pupils in pixels (using video dimensions)
+                    const dx = (leftPupil.x - rightPupil.x) * results.image.width;
+                    const dy = (leftPupil.y - rightPupil.y) * results.image.height;
+                    lastRawEyeDistPx = Math.hypot(dx, dy);
 
-                    // Convert normalized screen coordinates (0-1) to centered coordinates (-0.5 to 0.5)
-                    // Invert Y because screen Y is top-down, but 3D Y is bottom-up
-                    const normalizedX = eyeCenterX - 0.5;
-                    const normalizedY = -(eyeCenterY - 0.5);
+                    // --- Calculate Target Camera Position (in Meters) ---
 
-                    // --- X/Y Offset Calculation (physical) ---
-                    // Use current smoothed Z for stable view size calculation
-                    const { width: vw, height: vh } = viewSizeAtDepth(currentCameraOffsetZ);
-                    // move exactly half a frustum so the scene edge aligns with screen edge at max head move
-                    targetCameraOffsetX = normalizedX * (vw * 0.5);
-                    targetCameraOffsetY = normalizedY * (vh * 0.5);
+                    // Get current physical parameters from UI
+                    const screenWidthMM = parseFloat(screenWidthInput.value) || DEFAULT_SCREEN_WIDTH_MM;
+                    const screenHeightMM = parseFloat(screenHeightInput.value) || DEFAULT_SCREEN_HEIGHT_MM;
+                    // IPD is not directly used in this Z calculation method, but kept for potential future use
+                    // const ipdMM = parseFloat(ipdInput.value) || DEFAULT_IPD_MM;
+                    const parallaxScale = parseFloat(parallaxScaleSlider.value);
 
-                    // Apply parallax scale from slider
-                    const scale = parseFloat(parallaxScale.value);
-                    targetCameraOffsetX *= scale;
-                    targetCameraOffsetY *= scale;
-
-
-                    // --- Z Offset (Depth) Calculation ---
-                    // Calculate raw distance between eyes in normalized coords
-                    const dx = leftEye.x - rightEye.x;
-                    const dy = leftEye.y - rightEye.y;
-                    // Use image width to make distance somewhat consistent across resolutions
-                    lastRawEyeDist = Math.hypot(dx * results.image.width, dy * results.image.height);
-
-                    // Map eye distance to camera Z if calibrated
-                    if (nearEyeDist !== null && farEyeDist !== null && nearEyeDist > farEyeDist) {
+                    // 3. Calculate Target Z (Depth) based on calibration
+                    let currentTargetZ_meters;
+                    if (nearEyeDistPx !== null && farEyeDistPx !== null && nearEyeDistPx > farEyeDistPx) {
                         // Clamp current distance to the calibrated range
-                        const clampedEyeDist = Math.max(farEyeDist, Math.min(nearEyeDist, lastRawEyeDist));
+                        const clampedEyeDistPx = Math.max(farEyeDistPx, Math.min(nearEyeDistPx, lastRawEyeDistPx));
                         // Calculate ratio (0 = far, 1 = near)
-                        const depthRatio = (clampedEyeDist - farEyeDist) / (nearEyeDist - farEyeDist);
-                        // Interpolate camera Z (lerp)
-                        // Target Z = MAX_Z when ratio is 0 (far), MIN_Z when ratio is 1 (near)
-                        targetCameraOffsetZ = MAX_CAMERA_Z + (MIN_CAMERA_Z - MAX_CAMERA_Z) * depthRatio;
+                        const depthRatio = (clampedEyeDistPx - farEyeDistPx) / (nearEyeDistPx - farEyeDistPx);
+                        // Interpolate camera Z (lerp) between defined NEAR and FAR distances
+                        currentTargetZ_meters = THREE.MathUtils.lerp(FAR_Z_METERS, NEAR_Z_METERS, depthRatio);
                     } else {
-                        // Not calibrated, keep Z fixed at initial position
-                        targetCameraOffsetZ = INITIAL_CAMERA_Z;
+                        // Not calibrated, use the default middle Z position
+                        currentTargetZ_meters = (NEAR_Z_METERS + FAR_Z_METERS) / 2;
                     }
+                    targetCameraPos.z = currentTargetZ_meters;
+
+                    // 4. Calculate Target X/Y based on eye center and physical screen size
+                    // Convert normalized screen coords (0-1) to centered (-0.5 to 0.5)
+                    // Map centered coords to physical screen dimensions in meters
+                    // Invert Y: screen Y is top-down, 3D Y is bottom-up
+                    targetCameraPos.x = (eyeCenterX - 0.5) * (screenWidthMM * WORLD_SCALE) * parallaxScale;
+                    targetCameraPos.y = -(eyeCenterY - 0.5) * (screenHeightMM * WORLD_SCALE) * parallaxScale;
+
+                } else {
+                     // Optional: Reset target offsets if no face/eyes are detected
+                     // targetCameraPos.set(0, 0, (NEAR_Z_METERS + FAR_Z_METERS) / 2);
                 }
             } else {
-                // Optional: Reset target offsets if no face is detected
-                // targetCameraOffsetX = 0;
-                // targetCameraOffsetY = 0;
-                // targetCameraOffsetZ = INITIAL_CAMERA_Z; // Reset Z as well?
-                // targetCameraOffsetY = 0;
+                 // Optional: Reset target offsets if no face is detected
+                 // targetCameraPos.set(0, 0, (NEAR_Z_METERS + FAR_Z_METERS) / 2);
             }
             debugCtx.restore(); // Restore context state
         }
@@ -279,18 +313,25 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            // Apply smoothing (Low-pass filter) to X, Y, and Z offsets
-            currentCameraOffsetX += (targetCameraOffsetX - currentCameraOffsetX) * SMOOTHING;
-            currentCameraOffsetY += (targetCameraOffsetY - currentCameraOffsetY) * SMOOTHING;
-            currentCameraOffsetZ += (targetCameraOffsetZ - currentCameraOffsetZ) * SMOOTHING;
+            // Apply smoothing (EMA) to target camera position
+            currentCameraPos.lerp(targetCameraPos, smoothingFactor); // Use variable smoothingFactor
 
-            // Update camera position based on smoothed offsets
-            camera.position.x = currentCameraOffsetX;
-            camera.position.y = currentCameraOffsetY;
-            camera.position.z = currentCameraOffsetZ; // Update Z position
+            // Update camera position
+            camera.position.copy(currentCameraPos);
 
-            // Always look at the center of the scene
-            camera.lookAt(scene.position);
+            // --- Dynamically update FOV based on Z distance and screen height ---
+            const screenHeightMM = parseFloat(screenHeightInput.value) || DEFAULT_SCREEN_HEIGHT_MM;
+            const currentZ = Math.max(currentCameraPos.z, 0.01); // Ensure Z is positive
+            const screenHeightMeters = screenHeightMM * WORLD_SCALE;
+
+            // Formula: fov = 2 * atan( (screenHeight / 2) / distanceFromScreen )
+            camera.fov = THREE.MathUtils.radToDeg(
+                2 * Math.atan(screenHeightMeters / (2 * currentZ))
+            );
+            camera.updateProjectionMatrix(); // IMPORTANT: Update projection matrix after FOV change
+
+            // Always look at the center of the scene origin (0,0,0)
+            camera.lookAt(scene.position); // scene.position is (0,0,0) by default
 
             // Cube rotation removed to achieve the "window" effect
             // cube.rotation.x += 0.01; // Removed
@@ -308,19 +349,20 @@
 
         // --- Calibration ---
         function updateCalibrationStatus() {
-            if (nearEyeDist !== null && farEyeDist !== null) {
-                if (nearEyeDist > farEyeDist) {
-                    calibrationStatusElement.textContent = `Status: Calibrated (Near: ${nearEyeDist.toFixed(1)}, Far: ${farEyeDist.toFixed(1)})`;
+            if (nearEyeDistPx !== null && farEyeDistPx !== null) {
+                if (nearEyeDistPx > farEyeDistPx) {
+                    calibrationStatusElement.textContent = `Status: Calibrated (NearPx: ${nearEyeDistPx.toFixed(1)}, FarPx: ${farEyeDistPx.toFixed(1)})`;
                     calibrationStatusElement.style.color = 'lightgreen';
                 } else {
-                    calibrationStatusElement.textContent = 'Status: Error - Near must be > Far. Recalibrate.';
+                    // Allow Near == Far, but flag if Near < Far as it's likely wrong.
+                    calibrationStatusElement.textContent = 'Status: Error - Near Px must be > Far Px. Recalibrate.';
                     calibrationStatusElement.style.color = 'red';
                 }
-            } else if (nearEyeDist !== null) {
-                calibrationStatusElement.textContent = `Status: Near set (${nearEyeDist.toFixed(1)}). Set Far Point.`;
+            } else if (nearEyeDistPx !== null) {
+                calibrationStatusElement.textContent = `Status: Near set (${nearEyeDistPx.toFixed(1)}px). Set Far Point.`;
                 calibrationStatusElement.style.color = 'yellow';
-            } else if (farEyeDist !== null) {
-                calibrationStatusElement.textContent = `Status: Far set (${farEyeDist.toFixed(1)}). Set Near Point.`;
+            } else if (farEyeDistPx !== null) {
+                calibrationStatusElement.textContent = `Status: Far set (${farEyeDistPx.toFixed(1)}px). Set Near Point.`;
                 calibrationStatusElement.style.color = 'yellow';
             } else {
                 calibrationStatusElement.textContent = 'Status: Not Calibrated';
@@ -328,28 +370,46 @@
             }
         }
 
+        function resetCalibration() {
+            nearEyeDistPx = null;
+            farEyeDistPx = null;
+            console.log("Calibration Reset.");
+            updateCalibrationStatus();
+        }
+
         setNearBtn.addEventListener('click', () => {
-            if (lastRawEyeDist > 0) {
-                nearEyeDist = lastRawEyeDist;
-                console.log(`Set Near Point - Eye Distance: ${nearEyeDist}`);
+            if (lastRawEyeDistPx > 0) {
+                nearEyeDistPx = lastRawEyeDistPx;
+                console.log(`Set Near Point - Eye Distance (Pixels): ${nearEyeDistPx}`);
                 updateCalibrationStatus();
             } else {
-                console.warn("Cannot set Near Point: No face detected or eye distance is zero.");
+                console.warn("Cannot set Near Point: No valid eye distance detected.");
+                alert("Could not set Near Point. Make sure your face is clearly visible to the camera.");
             }
         });
 
         setFarBtn.addEventListener('click', () => {
-            if (lastRawEyeDist > 0) {
-                farEyeDist = lastRawEyeDist;
-                console.log(`Set Far Point - Eye Distance: ${farEyeDist}`);
+            if (lastRawEyeDistPx > 0) {
+                farEyeDistPx = lastRawEyeDistPx;
+                console.log(`Set Far Point - Eye Distance (Pixels): ${farEyeDistPx}`);
                 updateCalibrationStatus();
             } else {
-                console.warn("Cannot set Far Point: No face detected or eye distance is zero.");
+                console.warn("Cannot set Far Point: No valid eye distance detected.");
+                 alert("Could not set Far Point. Make sure your face is clearly visible to the camera.");
             }
         });
 
+        resetCalibrationBtn.addEventListener('click', resetCalibration);
+
 
         // --- Initialization ---
+        // Set initial slider values from constants
+        smoothingSlider.value = DEFAULT_SMOOTHING;
+        // Set initial input values from constants
+        screenWidthInput.value = DEFAULT_SCREEN_WIDTH_MM;
+        screenHeightInput.value = DEFAULT_SCREEN_HEIGHT_MM;
+        ipdInput.value = DEFAULT_IPD_MM;
+
         initThree();
         initMediaPipe();
         updateCalibrationStatus(); // Set initial status message

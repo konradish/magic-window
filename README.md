@@ -4,24 +4,28 @@
 
 **tl;dr** – This page spins up MediaPipe FaceMesh to grab eye landmarks from your webcam, pipes them into a tiny math shim, and offsets a THREE.js perspective-camera so the cube in front of you parallax-shifts as your head moves. Open the file over HTTPS, allow camera access, and your monitor turns into a faux “window” on a 3-D scene. Zero external servers are involved; everything runs client-side.
 
-## How it works
+## How it Works (Updated Logic)
 
 1.  **Webcam + Face Tracking**
     *   [MediaPipe FaceMesh](https://github.com/google/mediapipe/blob/master/mediapipe/modules/face_geometry/README.md) runs in WebAssembly and streams 468 facial-landmark points in real-time (≈15 ms on a mid-tier laptop). ([jsDelivr CDN](https://www.jsdelivr.com/package/npm/@mediapipe/face_mesh))
     *   The helper [@mediapipe/camera\_utils](https://www.npmjs.com/package/@mediapipe/camera_utils) ([GitHub](https://github.com/google/mediapipe/tree/master/mediapipe/web/solutions/camera_utils)) automagically handles `getUserMedia`, pumps frames into the model, and calls back every render tick.
-    *   Landmark indices `159` (left-eye lower-mid) and `386` (right-eye lower-mid) are used as a stable “gaze barycenter”. ([Reference 1](https://www.selvam.tech/blogs/mediapipe-facemesh-keypoints/), [Reference 2](https://stackoverflow.com/questions/66979377/mediapipe-face-mesh-keypoints-corresponding-to-the-face-parts))
+    *   Landmark indices `468` (right pupil center) and `473` (left pupil center) are used for stable head position and distance estimation. ([Reference](https://github.com/tensorflow/tfjs-models/blob/master/face-landmarks-detection/mesh_map.jpg))
 
-2.  **Mapping Head Pose → Camera Offset**
-    *   Landmarks arrive in normalized screen coordinates (0-1).
-    *   Subtracting 0.5 centers the coordinates.
-    *   Multiplying by a `MAX_OFFSET` (e.g., 2 world-units) scales the movement.
-    *   The result feeds into a simple low-pass filter (`targetX += (newX - targetX) * SMOOTHING`) so the camera eases instead of jittering.
-    *   X-movement pans the camera horizontally; Y-movement pans vertically (inverted so moving your head up moves the camera up).
-    *   The camera always uses `.lookAt(scene.position)` so the cube stays centered while its parallax effect sells the depth.
+2.  **Mapping Head Pose → Virtual Camera**
+    *   **Physical Setup:** You provide your monitor's physical width and height (in mm) and optionally your Inter-Pupillary Distance (IPD).
+    *   **Head Position (X/Y):** The midpoint between the detected pupils (in normalized video coordinates 0-1) is mapped to a physical position relative to the screen center (in meters). Moving your head left/right/up/down moves the virtual camera's X/Y position accordingly.
+    *   **Head Distance (Z):**
+        *   The distance between your pupils is measured in pixels (`eyeDistPx`) in the video feed.
+        *   You calibrate by clicking "Set Near Point" (when close) and "Set Far Point" (when far). This records the `eyeDistPx` for these two extremes.
+        *   The current `eyeDistPx` is then mapped (linearly interpolated) between the calibrated near/far pixel distances to estimate your current physical distance from the screen (Z position in meters).
+    *   **Smoothing:** An Exponential Moving Average (EMA) filter smooths the calculated X, Y, and Z target positions to reduce jitter. The smoothing factor is adjustable.
+    *   **Parallax Scale:** An adjustable slider allows exaggerating the X/Y camera movement for artistic effect.
 
-3.  **Rendering the Window**
-    *   [THREE.js](https://threejs.org/) (via [cdnjs CDN](https://cdnjs.com/libraries/three.js/)) draws a simple lit, rotating cube. This can be replaced with more complex scenes, GLTF models, etc.
-    *   The canvas is placed within a flexbox `div`. Resize listeners keep the aspect ratio and projection matrix updated.
+3.  **View-Dependent Rendering**
+    *   [THREE.js](https://threejs.org/) (via [cdnjs CDN](https://cdnjs.com/libraries/three.js/)) renders the 3D scene.
+    *   **Dynamic FOV:** The virtual camera's Field of View (FOV) is calculated *every frame* based on the current estimated head distance (Z) and the physical screen height. This ensures the perspective projection matches your viewpoint, making the screen appear like a true window. Formula: `fov = 2 * atan( (screenHeight / 2) / headDistance )`.
+    *   **Projection Update:** The camera's `projectionMatrix` is updated each frame to reflect the changes in position and FOV.
+    *   **Look At:** The camera always looks towards the center of the scene (0,0,0).
 
 ## Quick Start
 
@@ -42,12 +46,16 @@
 
 3.  **Allow camera access** when prompted by the browser.
 
-4.  **Calibrate Depth:**
-    *   You'll see buttons "Set Near Point" and "Set Far Point" at the bottom.
+4.  **Configure Physical Dimensions:**
+    *   Measure the **visible width and height** of your monitor screen in millimeters (e.g., with a ruler).
+    *   Enter these values into the "Screen Width (mm)" and "Screen Height (mm)" input boxes. Defaults are provided for a ~15" screen.
+    *   (Optional) Adjust the "IPD (mm)" value if you know yours (average is ~63mm). This isn't critical for the current depth calculation but might be used in future refinements.
+
+5.  **Calibrate Depth:**
+    *   You'll see buttons "Set Near Point", "Set Far Point", and "Reset Calibration" at the bottom.
     *   **Lean fully towards your screen** to the closest comfortable distance you want tracked. Click **"Set Near Point"**.
     *   **Lean back** to the furthest comfortable distance you want tracked. Click **"Set Far Point"**.
-    *   The status text will update. If it shows "Calibrated", the depth tracking is active. If it shows an error (e.g., Near <= Far), try calibrating again.
-    *   *Note:* Calibration uses the distance between your eyes in the video feed. Ensure your face is clearly visible during calibration clicks.
+    *   The status text will update. If it shows "Calibrated", the depth tracking is active. If it shows an error (e.g., Near Px <= Far Px), click "Reset Calibration" and try again.
 
 5.  **Move your head:**
     *   Move side-to-side and up/down: The scene shifts like looking through a window.
@@ -57,11 +65,11 @@
 
 | Tweak                 | What to change                                                                                                |
 | :-------------------- | :------------------------------------------------------------------------------------------------------------ |
-| Use nose-tip + depth  | Sample landmark `1` (nose tip) and potentially `199` (forehead)? Use the `z` coordinate to map to `camera.position.z`. |
-| Add iris tracking     | Use `refineLandmarks: true` (already enabled) and indices `468`-`477` for pupils. ([Ref](https://github.com/tensorflow/tfjs-models/blob/master/face-landmarks-detection/mesh_map.jpg)) |
-| Improve stability     | Swap simple exponential smoothing for a [One-Euro Filter](https://cristal.univ-lille.fr/~casiez/1euro/) or Kalman filter. |
+| Use IPD for Z       | Implement Z calculation: `headZmm = ipdMM * focalPx / eyeDistPx`. Requires estimating webcam `focalPx`. |
+| Improve Landmarks   | Average multiple pupil/iris landmarks (e.g., `468-472` left, `473-477` right) for more robust center points. |
+| Better Smoothing    | Swap simple EMA for a [One-Euro Filter](https://cristal.univ-lille.fr/~casiez/1euro/) or Kalman filter for lower latency smoothing. |
 | Richer scene          | Load a GLTF model using `THREE.GLTFLoader`; add post-processing effects.                                      |
-| Privacy toggle        | Add a UI switch that calls `cameraUtils.stop()` / `cameraUtils.start()` to pause/resume the camera stream.      |
+| Fallback Controls   | Add mouse/touch controls that activate when face tracking is lost (see munrocket/parallax-effect). |
 
 ## Dependencies & References
 
